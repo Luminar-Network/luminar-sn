@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=82", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luminar-sn"
+version = "0.1.0"
+description = "Luminar — Bittensor AI agent evaluation subnet"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "bittensor>=10.1.0",
+    "click>=8.1",
+    "requests>=2.31",
+    "docker>=7.1.0",
+    "pandas>=3.0.1",
+    "python-dotenv>=1.2.2",
+    "rich>=14.3.3",
+    "scikit-learn>=1.8.0",
+    "tenacity>=9.1.4",
+    "numpy>=2.0",
+    "loguru>=0.7.3",
+    "pre-commit>=4.5.1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+    "pre-commit>=4.5.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "responses>=0.24",
+    "ruff>=0.15.4",
+]
+
+[project.scripts]
+luminar = "luminar:cli"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setuptools — explicit package list
+# Auto-discovery fails on flat layouts with multiple top-level packages.
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.setuptools.packages.find]
+include = [
+    "luminar",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ruff
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "TCH",
+    "RUF",
+]
+
+ignore = [
+    "E501",   # line length — handled by black
+    "B008",   # function call in default arg (common in click)
+    "SIM108", # ternary operator — not always clearer
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["luminar"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # allow assert in tests
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Black
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | __pycache__
+)/
+'''
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pytest
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+log_cli = true
+log_cli_level = "INFO"
