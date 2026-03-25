@@ -100,7 +100,7 @@ class ValidatorCore:
     def _evaluation_cycle(self) -> None:
         """One full pass: poll → validate → evaluate → score → (maybe) set weights."""
 
-        # 1. Poll for next submission
+        # Poll for next submission
         submission = self._client.get_unevaluated_submission()
 
         if submission is None:
@@ -132,7 +132,7 @@ class ValidatorCore:
         )
         score_count: int = submission.get("score_count", 0)
         log.info(
-            "Evaluating submission %s from %s (scores so far: %d/5)",
+            "Evaluating submission %s from %s (scores so far: %d/20)",
             sub_id,
             miner_hotkey or "unknown",
             score_count,

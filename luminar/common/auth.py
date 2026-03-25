@@ -37,7 +37,6 @@ def fetch_validator_nonce(hotkey_ss58: str) -> dict:
     Call GET /v1/validator/nonce and return the full data payload.
     """
     url = f"{settings.backend_url}/v1/validator/nonce"
-    log.debug("Fetching validator nonce from %s", url)
 
     r = requests.get(
         url,

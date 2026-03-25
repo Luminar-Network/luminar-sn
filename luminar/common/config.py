@@ -74,7 +74,7 @@ class Settings:
     )
 
     logfile_max_bytes: int = field(
-        default_factory=lambda: _env("LOGFILE_MAX_BYTES", 10 * 1024 * 1024)
+        default_factory=lambda: _env_int("LOGFILE_MAX_BYTES", 10 * 1024 * 1024)
     )
     logs_backup_count: int = field(default_factory=lambda: _env("LOGS_BACKUP_COUNT", 7))
 
@@ -82,29 +82,31 @@ class Settings:
     plagarism_threshold: float = field(default_factory=lambda: _env("PLAGIARISM_THRESHOLD", 0.95))
 
     # Docker config
-    setup_timeout: int = field(default_factory=lambda: _env("SETUP_TIMEOUT", 600))
-    infer_timeout: int = field(default_factory=lambda: _env("INFER_TIMEOUT", 1500))
+    setup_timeout: int = field(default_factory=lambda: _env_int("SETUP_TIMEOUT", 600))
+    infer_timeout: int = field(default_factory=lambda: _env_int("INFER_TIMEOUT", 1500))
 
     memory_limit: str = field(default_factory=lambda: _env("MEMORY_LIMIY", "16g"))
 
+    # Docker CPU cap — prevents runaway agents from pinning validator CPUs
+    cpu_limit: float = field(
+        default_factory=lambda: float(os.environ.get("CPU_LIMIT", 4.0))
+    )
+
     # Burn
-    burn_model: bool = field(default_factory=lambda: _env_bool("BURN_MODE", True))
+    burn_mode: bool = field(default_factory=lambda: _env_bool("BURN_MODE", True))
 
     # Scored-submissions persistence
-    # Path to the JSON file where evaluated submission IDs are persisted across restarts.
     scored_cache_path: Path = field(
         default_factory=lambda: Path(
             _env("LUMINAR_SCORED_CACHE_PATH", ".luminar_cache/scored_submissions.json")
         )
     )
     # Maximum number of submission IDs to retain in the scored cache.
-    # Oldest entries are evicted once this limit is reached.
     scored_cache_max_size: int = field(
         default_factory=lambda: _env_int("LUMINAR_SCORED_CACHE_MAX_SIZE", 100)
     )
 
     # Allowed outbound hosts for the setup-phase network (allowlist-only egress).
-    # Comma-separated. Leave empty to use the default built-in allowlist.
     setup_allowed_hosts: str = field(
         default_factory=lambda: _env("LUMINAR_SETUP_ALLOWED_HOSTS", "")
     )
