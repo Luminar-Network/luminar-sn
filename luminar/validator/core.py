@@ -5,7 +5,6 @@ Main validator evaluation loop.
 from __future__ import annotations
 
 import ast
-import re
 import time
 from pathlib import Path
 
@@ -17,24 +16,12 @@ from luminar.common.logging import get_logger
 from luminar.validator.backend_client import BackendClient
 from luminar.validator.best_agent_cache import BestAgentCache, BestAgentWatcher
 from luminar.validator.sandbox import SandboxRunner
+from luminar.validator.scored_cache import ScoredCache
 from luminar.validator.scoring import score_output
+from luminar.validator.security import validate_agent_file
 from luminar.validator.weight_setter import WeightSetter
 
 log = get_logger(__name__)
-
-# Security: patterns that indicate malicious/unsafe agent code
-_MALWARE_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bos\.system\s*\("),
-    re.compile(r"\bsubprocess\b"),
-    re.compile(r"\bsocket\b"),
-    re.compile(r"\bexec\s*\("),
-    re.compile(r"\beval\s*\("),
-    re.compile(r"\b__import__\s*\("),
-    re.compile(r"\bpip\b"),
-    re.compile(r"\bwget\b"),
-    re.compile(r"\bcurl\b"),
-    re.compile(r'open\s*\(\s*["\'](?!/data)["\']'),
-]
 
 
 class ValidatorCore:
@@ -57,7 +44,12 @@ class ValidatorCore:
         self._sandbox = SandboxRunner(benchmark_data_dir)
         self._weight_setter = WeightSetter(self._wallet, self._subtensor, self._metagraph)
 
-        self._scored: set[str] = set()
+        # Persistent, bounded cache of already-scored submission IDs.
+        # Survives validator restarts; auto-evicts oldest entries at max_size.
+        self._scored = ScoredCache(
+            path=settings.scored_cache_path,
+            max_size=settings.scored_cache_max_size,
+        )
 
     # Lifecycle
 
@@ -106,7 +98,7 @@ class ValidatorCore:
                 time.sleep(settings.validator_poll_interval)
 
     def _evaluation_cycle(self) -> None:
-        """One full pass: poll → evaluate → score → (maybe) set weights."""
+        """One full pass: poll → validate → evaluate → score → (maybe) set weights."""
 
         # 1. Poll for next submission
         submission = self._client.get_unevaluated_submission()
@@ -121,13 +113,15 @@ class ValidatorCore:
         sub_id: str = submission.get("submission_id") or submission.get("id")
         if not sub_id:
             log.error(
-                "Submission response missing id field. Keys received: %s", list(submission.keys())
+                "Submission response missing id field. Keys received: %s",
+                list(submission.keys()),
             )
             return
 
+        # Check persistent scored cache — survives restarts
         if sub_id in self._scored:
             log.warning(
-                "Submission %s already scored by this validator this session — skipping.",
+                "Submission %s already scored by this validator — skipping.",
                 sub_id,
             )
             time.sleep(settings.validator_poll_interval)
@@ -152,20 +146,23 @@ class ValidatorCore:
             self._client.post_score(sub_id, 0.0)
             return
 
-        agent_source = agent_bytes.decode(errors="replace")
-
-        # Malware scan
-        malware_reason = _detect_malware(agent_source)
-        if malware_reason:
-            log.warning("Malware detected in %s: %s", sub_id, malware_reason)
+        # Security validation — pure Python, binary check, AST scan, token scan.
+        # This replaces the old regex-based _detect_malware().
+        security_reason = validate_agent_file(agent_bytes)
+        if security_reason:
+            log.warning("Security check failed for %s: %s", sub_id, security_reason)
             try:
-                self._client.blacklist_miner(miner_hotkey, sub_id, f"malware: {malware_reason}")
+                self._client.blacklist_miner(miner_hotkey, sub_id, f"security: {security_reason}")
             except Exception as bl_exc:
                 log.error("Blacklist call failed (continuing): %s", bl_exc)
             self._client.post_score(sub_id, 0.0)
+            self._scored.add(sub_id)
             return
 
         # Plagiarism check
+        #    validate_agent_file guarantees the file is valid Python, so we can
+        #    safely decode it here.
+        agent_source = agent_bytes.decode("utf-8")
         plagiarism_reason = self._check_plagiarism(agent_source)
         if plagiarism_reason:
             log.warning("Plagiarism detected in %s: %s", sub_id, plagiarism_reason)
@@ -176,6 +173,7 @@ class ValidatorCore:
             except Exception as bl_exc:
                 log.error("Blacklist call failed (continuing): %s", bl_exc)
             self._client.post_score(sub_id, 0.0)
+            self._scored.add(sub_id)
             return
 
         # Sandbox evaluation
@@ -190,6 +188,7 @@ class ValidatorCore:
                 sandbox_result.stderr[:300],
             )
             self._client.post_score(sub_id, 0.0)
+            self._scored.add(sub_id)
             self._maybe_set_weights()
             return
 
@@ -199,14 +198,14 @@ class ValidatorCore:
             log.debug("Ground truth downloaded into memory (%d bytes).", len(ground_truth_bytes))
         except Exception as exc:
             log.error("Ground truth download failed: %s — skipping cycle.", exc)
-            # Don't penalise the miner for our own failure
+            # Don't penalise the miner for our own failure — do NOT mark as scored
             return
 
         # Score
         output_csv_bytes = sandbox_result.output_csv_bytes
         score_result = score_output(output_csv_bytes, ground_truth_bytes)
 
-        # Post score
+        # Post score and mark as done
         try:
             self._client.post_score(sub_id, score_result.final_score)
             self._scored.add(sub_id)  # mark as scored so we never re-evaluate
@@ -266,26 +265,20 @@ class ValidatorCore:
             log.warning("Plagiarism check error: %s", exc)
             return None
 
-        if similarity >= settings.plagarism_threshold:
-            return f"AST similarity {similarity:.2%} ≥ threshold {settings.plagarism_threshold:.2%}"
+        if similarity >= settings.plagiarism_threshold:
+            return (
+                f"AST similarity {similarity:.2%} ≥ threshold {settings.plagiarism_threshold:.2%}"
+            )
 
         return None
 
 
-# Security helpers
-def _detect_malware(source: str) -> str | None:
-    """
-    Scan source code text for dangerous patterns.
-    """
-    for pattern in _MALWARE_PATTERNS:
-        if pattern.search(source):
-            return pattern.pattern
-    return None
+# AST similarity helpers
 
 
 def _strip_boilerplate(tree: ast.Module) -> ast.Module:
     """
-    Remove boilerplate top-level nodes before similarity comparison:
+    Remove boilerplate top-level nodes before similarity comparison.
     """
     meaningful: list[ast.stmt] = []
 
@@ -316,7 +309,7 @@ def _strip_boilerplate(tree: ast.Module) -> ast.Module:
 def _ast_similarity(source_a: str, source_b: str) -> float:
     """
     Compute a structural similarity score in [0.0, 1.0] between two Python
-    source files using AST node type sequences.
+    source files using AST node type bigrams.
     """
     tree_a = _strip_boilerplate(ast.parse(source_a))
     tree_b = _strip_boilerplate(ast.parse(source_b))

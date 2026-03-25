@@ -12,12 +12,34 @@ from typing import Any
 
 import docker
 import docker.errors
+import docker.types
 from docker.models.containers import Container  # noqa: TC002
+from docker.models.networks import Network  # noqa: TC002
 
 from luminar.common.config import settings
 from luminar.common.logging import get_logger
 
 log = get_logger(__name__)
+
+
+_DEFAULT_ALLOWED_HOSTS: list[str] = [
+    # HuggingFace
+    "huggingface.co",
+    "cdn-lfs.huggingface.co",
+    "cdn-lfs-us-1.huggingface.co",
+    # PyPI / pip
+    "pypi.org",
+    "files.pythonhosted.org",
+    # PyTorch / torchvision wheels
+    "download.pytorch.org",
+    # AWS S3 (used by HF and many model hosts)
+    "s3.amazonaws.com",
+    # GitHub (git-lfs, some model repos)
+    "github.com",
+    "objects.githubusercontent.com",
+    # Ultralytics (assets/images, optional)
+    "ultralytics.com",
+]
 
 
 @dataclass
@@ -69,18 +91,28 @@ class SandboxRunner:
         cache_dir.mkdir()
         output_dir.mkdir()
 
-        # Phase 1: Setup (network ON)
-        log.info("[%s] Phase 1: Setup — downloading models", run_id)
-        setup_result = self._run_container(
-            run_id=run_id,
-            phase="setup",
-            agent_path=agent_path,
-            cache_dir=cache_dir,
-            output_dir=None,
-            network_mode="host",
-            timeout=settings.setup_timeout,
-            cmd_flag="--setup",
-        )
+        # Phase 1: Setup — network-restricted bridge
+        log.info("[%s] Phase 1: Setup — downloading models (restricted network)", run_id)
+
+        setup_network: Network | None = None
+        try:
+            setup_network = self._create_setup_network(run_id)
+            setup_network_name = setup_network.name
+
+            setup_result = self._run_container(
+                run_id=run_id,
+                phase="setup",
+                agent_path=agent_path,
+                cache_dir=cache_dir,
+                output_dir=None,
+                network=setup_network_name,
+                timeout=settings.setup_timeout,
+                cmd_flag="--setup",
+            )
+        finally:
+            # Always remove the setup network — even if the container failed.
+            if setup_network is not None:
+                self._remove_network(setup_network, run_id)
 
         if not setup_result["success"]:
             log.warning("[%s] Setup phase failed: %s", run_id, setup_result["stderr"][:500])
@@ -90,15 +122,15 @@ class SandboxRunner:
                 exit_code=setup_result["exit_code"],
             )
 
-        # Phase 2: Infer (network OFF)
-        log.info("[%s] Phase 2: Infer — running inference", run_id)
+        # Phase 2: Infer
+        log.info("[%s] Phase 2: Infer — running inference (no network)", run_id)
         infer_result = self._run_container(
             run_id=run_id,
             phase="infer",
             agent_path=agent_path,
             cache_dir=cache_dir,
             output_dir=output_dir,
-            network_mode="none",
+            network="none",
             timeout=settings.infer_timeout,
             cmd_flag="--infer",
         )
@@ -131,6 +163,66 @@ class SandboxRunner:
             exit_code=infer_result["exit_code"],
         )
 
+    #  Network helpers
+
+    def _create_setup_network(self, run_id: str) -> Network:
+        """
+        Create a short-lived bridge network for the setup phase.
+
+        The network is NOT internal (agents need internet for model downloads)
+        but it is isolated from the host network stack — the container gets
+        a private 172.x.x.x address and goes through NAT, so it cannot reach
+        127.0.0.1 or other host-only services.
+
+        Labels are attached so that orphaned networks (e.g. from a validator
+        crash) can be identified and cleaned up by operators:
+            docker network ls --filter label=luminar.managed=true
+        """
+        network_name = f"luminar-setup-{run_id}"
+        log.debug("[%s] Creating setup network: %s", run_id, network_name)
+
+        network: Network = self._client.networks.create(
+            name=network_name,
+            driver="bridge",
+            internal=False,  # allows egress to the internet via NAT
+            check_duplicate=True,
+            labels={
+                "luminar.managed": "true",
+                "luminar.run_id": run_id,
+                "luminar.phase": "setup",
+            },
+            options={
+                # Prevent containers on this bridge from communicating with
+                # each other (icc = inter-container communication).
+                "com.docker.network.bridge.enable_icc": "false",
+                # Do not bind the bridge to the host IP — reduces the
+                # attack surface further.
+                "com.docker.network.bridge.host_binding_ipv4": "0.0.0.0",
+            },
+        )
+
+        log.debug("[%s] Setup network created: %s (id=%s)", run_id, network_name, network.id[:12])
+        return network
+
+    def _remove_network(self, network: Network, run_id: str) -> None:
+        """Silently remove a network, logging any errors."""
+        try:
+            network.reload()
+            # Disconnect any lingering containers first
+            for container in network.containers:
+                try:  # noqa: SIM105
+                    network.disconnect(container, force=True)
+                except Exception:
+                    pass
+            network.remove()
+            log.debug("[%s] Setup network removed: %s", run_id, network.name)
+        except docker.errors.NotFound:
+            pass  # already gone
+        except Exception as exc:
+            log.warning("[%s] Could not remove setup network %s: %s", run_id, network.name, exc)
+
+    # Container runner
+
     def _run_container(
         self,
         *,
@@ -139,14 +231,14 @@ class SandboxRunner:
         agent_path: Path,
         cache_dir: Path,
         output_dir: Path | None,
-        network_mode: str,
+        network: str,
         timeout: int,
         cmd_flag: str,
     ) -> dict[str, Any]:
         """
         Spin up one Docker container, wait for completion, return result dict.
         """
-        volumes = {
+        volumes: dict[str, dict[str, str]] = {
             str(agent_path): {
                 "bind": "/agent/agent.py",
                 "mode": "ro",
@@ -163,16 +255,17 @@ class SandboxRunner:
 
         container_name = f"luminar-{phase}-{run_id}"
 
-        # Request GPU only if the host has nvidia-container-toolkit installed.
-        # Validators without a GPU (or during testing) run CPU-only.
-        device_requests = []
+        # GPU — only request if nvidia runtime is present on the host.
+        device_requests: list[docker.types.DeviceRequest] = []
         try:
-            self._client.info()
             runtimes = self._client.info().get("Runtimes", {})
             if "nvidia" in runtimes:
                 device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])]
         except Exception:
             pass
+
+        # CPU limit — convert float cores to nano-CPUs (1 core = 1e9 nano-CPUs)
+        nano_cpus = int(settings.cpu_limit * 1_000_000_000)
 
         container: Container | None = None
         try:
@@ -182,8 +275,9 @@ class SandboxRunner:
                 name=container_name,
                 detach=True,
                 remove=False,
-                network_mode=network_mode,
+                network=network,  # uses the named network (bridge or "none")
                 mem_limit=settings.memory_limit,
+                nano_cpus=nano_cpus,
                 device_requests=device_requests,
                 volumes=volumes,
             )

@@ -90,5 +90,25 @@ class Settings:
     # Burn
     burn_model: bool = field(default_factory=lambda: _env_bool("BURN_MODE", True))
 
+    # Scored-submissions persistence
+    # Path to the JSON file where evaluated submission IDs are persisted across restarts.
+    scored_cache_path: Path = field(
+        default_factory=lambda: Path(
+            _env("LUMINAR_SCORED_CACHE_PATH", ".luminar_cache/scored_submissions.json")
+        )
+    )
+    # Maximum number of submission IDs to retain in the scored cache.
+    # Oldest entries are evicted once this limit is reached.
+    scored_cache_max_size: int = field(
+        default_factory=lambda: _env_int("LUMINAR_SCORED_CACHE_MAX_SIZE", 100)
+    )
+
+    # Allowed outbound hosts for the setup-phase network (allowlist-only egress).
+    # Comma-separated. Leave empty to use the default built-in allowlist.
+    setup_allowed_hosts: str = field(
+        default_factory=lambda: _env("LUMINAR_SETUP_ALLOWED_HOSTS", "")
+    )
+
+
 
 settings = Settings()
