@@ -17,6 +17,10 @@ def _env_int(key: str, default: int) -> int:
     return int(os.environ.get(key, default))
 
 
+def _env_float(key: str, default: float) -> float:
+    return float(os.environ.get(key, default))
+
+
 def _env_bool(key: str, default: bool) -> bool:
     val = os.environ.get(key, "")
     if not val:
@@ -76,10 +80,10 @@ class Settings:
     logfile_max_bytes: int = field(
         default_factory=lambda: _env_int("LOGFILE_MAX_BYTES", 10 * 1024 * 1024)
     )
-    logs_backup_count: int = field(default_factory=lambda: _env("LOGS_BACKUP_COUNT", 7))
+    logs_backup_count: int = field(default_factory=lambda: _env_int("LOGS_BACKUP_COUNT", 7))
 
-    # Plagarism threshold
-    plagarism_threshold: float = field(default_factory=lambda: _env("PLAGIARISM_THRESHOLD", 0.95))
+    # Plagiarism threshold
+    plagiarism_threshold: float = field(default_factory=lambda: _env_float("PLAGIARISM_THRESHOLD", 0.95))
 
     # Docker config
     setup_timeout: int = field(default_factory=lambda: _env_int("SETUP_TIMEOUT", 600))
