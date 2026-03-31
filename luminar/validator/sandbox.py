@@ -287,8 +287,12 @@ class SandboxRunner:
                 result = container.wait(timeout=timeout)
                 exit_code: int = result.get("StatusCode", -1)
             except Exception:
+                last_logs = container.logs(tail=200).decode(errors="replace")
                 log.warning(
                     "[%s] Container %s timed out after %ds", run_id, container_name, timeout
+                )
+                log.warning(
+                    f"Container logs: {last_logs}"
                 )
                 try:  # noqa: SIM105
                     container.kill()
