@@ -87,7 +87,7 @@ class Settings:
 
     # Docker config
     setup_timeout: int = field(default_factory=lambda: _env_int("SETUP_TIMEOUT", 600))
-    infer_timeout: int = field(default_factory=lambda: _env_int("INFER_TIMEOUT", 3600))
+    infer_timeout: int = field(default_factory=lambda: _env_int("INFER_TIMEOUT", 1500))
 
     memory_limit: str = field(default_factory=lambda: _env("MEMORY_LIMIY", "16g"))
 
