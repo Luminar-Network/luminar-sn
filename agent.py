@@ -1,5 +1,15 @@
 """
 agent.py —> Traffic Sign & Traffic Light Inference Pipeline
+-------------------------------------
+Minimal agent for testing the validator pipeline end-to-end.
+
+Setup phase: downloads a tiny file from HuggingFace to verify
+             network access and /cache/ write access work.
+
+Infer phase: writes hardcoded predictions to output.csv —
+             no model loading, no GPU needed.
+
+Keep all your agent logic between START and END.
 """
 
 from __future__ import annotations
