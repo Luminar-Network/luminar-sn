@@ -54,7 +54,9 @@ Miners do not run a daemon — you just write and submit code.
   Required output format (see luminar/validator/scoring.py):
   ```bash
     video_id,frame_idx,category,n_items,box_2d
-    video_0000.mp4,0,car,2,"[[x1,y1,x2,y2], [x1,y1,x2,y2]]"
+    video_0000.mp4,0,traffic_lights,2,"[[x1,y1,x2,y2], [x1,y1,x2,y2]]"
+    video_0000.mp4,0,traffic_signs,2,"[[x1,y1,x2,y2], [x1,y1,x2,y2]]"
+    video_0000.mp4,0,vehicle,2,"[[x1,y1,x2,y2], [x1,y1,x2,y2]]"
     ...
   ```
 
