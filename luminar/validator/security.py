@@ -7,6 +7,9 @@ Validates that a submitted file is:
   3. Free of dangerous constructs detected via AST walk (cannot be evaded
      by string encoding, unicode lookalikes, or dynamic attribute tricks).
   4. Free of suspiciously large encoded string literals.
+  5. Structurally valid: must define a LuminarAgent class with setup() and
+     infer() methods, a main() function, and main() must call both
+     agent.setup() and agent.infer()
 """
 
 from __future__ import annotations
@@ -185,7 +188,25 @@ def validate_agent_file(agent_bytes: bytes) -> str | None:
     return None
 
 
-# Internal helpers
+def validate_agent_format(agent_bytes: bytes) -> str | None:
+    """
+    Structural / contract validation of a submitted agent file.
+    """
+    try:
+        source = agent_bytes.decode("utf-8")
+        tree = ast.parse(source, filename="agent.py")
+    except Exception as exc:
+        # Should not happen if validate_agent_file passed, but be defensive.
+        return f"Format check: could not parse file: {exc}"
+
+    reason = _format_check(tree)
+    if reason:
+        log.warning("Agent format check failed: %s", reason)
+    else:
+        log.debug("Agent file passed format check.")
+    return reason
+
+
 
 # Common binary file magic numbers (first 4 bytes).
 _KNOWN_BINARY_MAGIC: frozenset[bytes] = frozenset(
@@ -320,5 +341,110 @@ def _token_scan(source: str) -> str | None:
                 f"String literal at line {tok_start[0]} contains a long base64-like blob "
                 f"(≥200 consecutive base64 characters). Possible encoded payload."
             )
+
+    return None
+
+
+# Internal helpers — format / contract check
+
+
+def _format_check(tree: ast.Module) -> str | None:
+    """
+    Verify the structural contract required of every miner agent.
+
+    The check is intentionally lenient about *how* inference is done inside
+    setup/infer — it only verifies that the required names and call sites
+    exist.
+    """
+
+    # LuminarAgent class with setup() and infer() methods
+    luminar_class: ast.ClassDef | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "LuminarAgent":
+            luminar_class = node
+            break
+
+    if luminar_class is None:
+        return (
+            "Missing required class 'LuminarAgent'. "
+            "Your agent.py must define a class named LuminarAgent."
+        )
+
+    class_method_names: set[str] = {
+        n.name
+        for n in ast.walk(luminar_class)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for required_method in ("setup", "infer"):
+        if required_method not in class_method_names:
+            return (
+                f"LuminarAgent is missing required method '{required_method}'. "
+                f"Define 'def {required_method}(self): ...' inside LuminarAgent."
+            )
+
+    # top-level main() function
+    main_func: ast.FunctionDef | None = None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main":
+            main_func = node
+            break
+
+    if main_func is None:
+        return (
+            "Missing required top-level function 'main'. "
+            "Your agent.py must define a 'def main() -> None:' function."
+        )
+
+    # main() must instantiate LuminarAgent and call .setup() / .infer()
+    #
+    # Strategy: collect all names assigned via  `<name> = LuminarAgent(...)`
+    # inside main(), then verify that both `<name>.setup()` and
+    # `<name>.infer()` appear somewhere inside the same function body.
+
+    agent_var_names: set[str] = set()
+
+    for node in ast.walk(main_func):
+        if not isinstance(node, ast.Assign):
+            continue
+        # RHS must be a call to LuminarAgent (possibly with args/kwargs)
+        if not (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "LuminarAgent"
+        ):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                agent_var_names.add(target.id)
+
+    if not agent_var_names:
+        return (
+            "main() does not instantiate LuminarAgent. Add 'agent = LuminarAgent()' inside main()."
+        )
+
+    # Collect all method calls of the form  <var>.<method>()  inside main()
+    calls_found: set[str] = set()  # elements like "agent.setup", "agent.infer"
+    for node in ast.walk(main_func):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in agent_var_names
+        ):
+            continue
+        calls_found.add(f"{func.value.id}.{func.attr}")
+
+    for var in agent_var_names:
+        for required_call in ("setup", "infer"):
+            dotted = f"{var}.{required_call}"
+            if dotted not in calls_found:
+                return (
+                    f"main() never calls '{dotted}()'. "
+                    f"Ensure main() calls both {var}.setup() and {var}.infer() "
+                    f"in the appropriate --setup / --infer branches."
+                )
 
     return None
