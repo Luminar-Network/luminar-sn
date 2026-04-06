@@ -18,7 +18,7 @@ from luminar.validator.best_agent_cache import BestAgentCache, BestAgentWatcher
 from luminar.validator.sandbox import SandboxRunner
 from luminar.validator.scored_cache import ScoredCache
 from luminar.validator.scoring import score_output
-from luminar.validator.security import validate_agent_file
+from luminar.validator.security import validate_agent_file, validate_agent_format
 from luminar.validator.weight_setter import WeightSetter
 
 log = get_logger(__name__)
@@ -155,6 +155,13 @@ class ValidatorCore:
                 self._client.blacklist_miner(miner_hotkey, sub_id, f"security: {security_reason}")
             except Exception as bl_exc:
                 log.error("Blacklist call failed (continuing): %s", bl_exc)
+            self._client.post_score(sub_id, 0.0)
+            self._scored.add(sub_id)
+            return
+
+        format_reason = validate_agent_format(agent_bytes)
+        if format_reason:
+            log.warning("Format check failed for %s: %s", sub_id, format_reason)
             self._client.post_score(sub_id, 0.0)
             self._scored.add(sub_id)
             return
