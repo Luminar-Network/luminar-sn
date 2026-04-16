@@ -32,6 +32,12 @@ uv pip install -e .
 docker build -f Dockerfile.sandbox -t luminar-sandbox:latest .
 ```
 
+## Environment Variables
+You must keep the luminar backend url as specified below:
+```
+LUMINAR_BACKEND_URL=api.subnet.luminar.network
+```
+
 ## Running a Miner
 Miners do not run a daemon — you just write and submit code.
 
