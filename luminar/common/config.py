@@ -99,6 +99,11 @@ class Settings:
     # Burn
     burn_mode: bool = field(default_factory=lambda: _env_bool("BURN_MODE", True))
 
+    # Benchmark type
+    benchmark_type: str = field(
+        default_factory=lambda: _env("LUMINAR_BENCHMARK_TYPE", "traffic")
+    )
+
     # Scored-submissions persistence
     scored_cache_path: Path = field(
         default_factory=lambda: Path(

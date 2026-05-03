@@ -17,7 +17,7 @@ from luminar.validator.backend_client import BackendClient
 from luminar.validator.best_agent_cache import BestAgentCache, BestAgentWatcher
 from luminar.validator.sandbox import SandboxRunner
 from luminar.validator.scored_cache import ScoredCache
-from luminar.validator.scoring import score_output
+from luminar.validator.scoring import get_scorer
 from luminar.validator.security import validate_agent_file, validate_agent_format
 from luminar.validator.weight_setter import WeightSetter
 
@@ -201,7 +201,7 @@ class ValidatorCore:
 
         # Fetch ground truth fresh into memory
         try:
-            ground_truth_bytes = self._client.download_ground_truth()
+            ground_truth_bytes = self._client.download_ground_truth(settings.benchmark_type)
             log.debug("Ground truth downloaded into memory (%d bytes).", len(ground_truth_bytes))
         except Exception as exc:
             log.error("Ground truth download failed: %s — skipping cycle.", exc)
@@ -210,7 +210,8 @@ class ValidatorCore:
 
         # Score
         output_csv_bytes = sandbox_result.output_csv_bytes
-        score_result = score_output(output_csv_bytes, ground_truth_bytes)
+        scorer = get_scorer(settings.benchmark_type)
+        score_result = scorer(output_csv_bytes, ground_truth_bytes)
 
         # Post score and mark as done
         try:

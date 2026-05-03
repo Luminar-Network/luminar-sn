@@ -60,6 +60,18 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Infer benchmark type from directory name if not already set
+    if "LUMINAR_BENCHMARK_TYPE" not in os.environ:
+        benchmark_name = benchmark_dir.name
+        if benchmark_name in ("traffic", "license-plate"):
+            os.environ["LUMINAR_BENCHMARK_TYPE"] = benchmark_name
+        else:
+            log.warning(
+                "Could not infer benchmark type from directory '%s'. Using 'traffic' as default.",
+                benchmark_name,
+            )
+            os.environ["LUMINAR_BENCHMARK_TYPE"] = "traffic"
+
     # Pull wallet values using dot-key access
     wallet_name = _get(args, "wallet.name", "default")
     wallet_hotkey = _get(args, "wallet.hotkey", "default")
@@ -130,16 +142,18 @@ def main() -> None:
 
     log.info(
         "Starting Luminar validator\n"
-        "  network  : %s\n"
-        "  netuid   : %d\n"
-        "  hotkey   : %s\n"
-        "  backend  : %s\n"
-        "  benchmark: %s",
+        "  network        : %s\n"
+        "  netuid         : %d\n"
+        "  hotkey         : %s\n"
+        "  backend        : %s\n"
+        "  benchmark      : %s\n"
+        "  benchmark_type : %s",
         settings.network,
         settings.netuid,
         wallet.hotkey.ss58_address,
         settings.backend_url,
         benchmark_dir,
+        settings.benchmark_type,
     )
 
     core = ValidatorCore(wallet=wallet, benchmark_data_dir=benchmark_dir)

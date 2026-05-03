@@ -160,11 +160,11 @@ class BackendClient:
 
     # Ground truth
 
-    def download_ground_truth(self) -> bytes:
+    def download_ground_truth(self, benchmark_type: str = "traffic") -> bytes:
         """GET /v1/validator/benchmark/ground-truth"""
         r = self._get(
             "/v1/validator/benchmark/ground-truth",
-            params=self._fresh_auth_get(),
+            params={**self._fresh_auth_get(), "benchmark_type": benchmark_type},
             stream=True,
         )
         return r.content
